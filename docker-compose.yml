@@ -1,0 +1,132 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: vendor_platform_db
+    environment:
+      POSTGRES_DB: vendor_platform
+      POSTGRES_USER: vendor_admin
+      POSTGRES_PASSWORD: vendor_pass_2026
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - vendor_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vendor_admin"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend API (Node.js/Express)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: ../docker/Dockerfile.backend
+    container_name: vendor_platform_backend
+    environment:
+      NODE_ENV: development
+      PORT: 5000
+      DATABASE_URL: postgresql://vendor_admin:vendor_pass_2026@postgres:5432/vendor_platform
+      JWT_SECRET: development-secret-change-in-production
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - vendor_network
+    command: npm run dev
+
+  # ML Service (Python/FastAPI)
+  ml-service:
+    build:
+      context: ./ml-service
+      dockerfile: ../docker/Dockerfile.ml
+    container_name: vendor_platform_ml
+    environment:
+      PORT: 8000
+      DATABASE_URL: postgresql://vendor_admin:vendor_pass_2026@postgres:5432/vendor_platform
+      MODEL_PATH: /app/models
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./ml-service:/app
+      - ml_models:/app/models
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - vendor_network
+    command: uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+
+  # Frontend (Next.js)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../docker/Dockerfile.frontend
+    container_name: vendor_platform_frontend
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:5000
+      NEXT_PUBLIC_ML_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - backend
+      - ml-service
+    networks:
+      - vendor_network
+    command: npm run dev
+
+  # Redis (for caching and session management)
+  redis:
+    image: redis:7-alpine
+    container_name: vendor_platform_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - vendor_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # pgAdmin (Database Management UI - Optional)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: vendor_platform_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@vendorplatform.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    networks:
+      - vendor_network
+
+networks:
+  vendor_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  ml_models:
+  pgadmin_data:
